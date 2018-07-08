@@ -1,127 +1,145 @@
 const program = require('commander')
 const fs = require('fs')
+const path = require('path')
 const chalk = require('chalk')
+const clear = require('clear')
+
 const parseCSV = require('csv-parse/lib/sync')
+const fuzzy = require('fuzzy')
 
-const {flatten, toArray, intersection, uniques} = require('./utils/arrays')
-const {trim} = require('./utils/string')
-const {pipe} = require('./utils/functions')
+const inquirer = require('inquirer')
+inquirer.registerPrompt('autocomplete', require('inquirer-autocomplete-prompt'))
 
-// get raw data
-const rawData = fs.readFileSync('./data/assoc-plants1.csv')
-const parsed = parseCSV(rawData, {delimiter: ';', columns: true})
-// objname: 'nom',
-// raw: true
+const {allPlants, smartMatchingFriends} = require('./plantFinders')
 
-const matchingPlants = rootNames => {
-  return flatten(
-    toArray(rootNames).map(rootName => {
-      return parsed
-      .filter(plant => plant.name.toLowerCase() === rootName.toLowerCase())
-    })
-  )
+let allPlantDataSources = []
+let allPlantsData
+// actions
+const importPlantsData = (filePaths) => {
+  filePaths = filePaths.split(',')
+    .map(filePath => path.resolve(filePath))
+  
+  console.log('importPlantsData', filePaths)
+  allPlantDataSources = filePaths.map(filePath => {
+    //'./data/assoc-plants1.csv'
+    const rawData = fs.readFileSync(filePath)
+    allPlantsData = parseCSV(rawData, {delimiter: ';', columns: true}) 
+    return allPlantsData
+  })
+  
 }
-
-const matchingFriends = rootNames => {
-  return uniques(flatten(
-    matchingPlants(toArray(rootNames))
-      .map(plant => plant.friends)
-      .map(fiends => fiends.split(','))
-  ))
-  .filter(x => x !== '')
-  .map(trim)
-}
-
-const matchingFiends = rootNames => {
-  return uniques(flatten(
-    matchingPlants(toArray(rootNames))
-      .map(plant => plant.fiends)
-      .map(fiends => fiends.split(','))
-  ))
-  .filter(x => x !== '')
-  .map(trim)
-}
-
-const incompatibles = rootNames => {
-  return uniques(
-    flatten(
-      rootNames.map(plantName => {
-        const fiends = matchingFiends(plantName)
-        return intersection(rootNames, fiends)
-      })
-    )
-  )
-}
-
-const compatibles = rootNames => {
-  const incompatiblePlants = incompatibles(rootNames)
-  let remains = rootNames.filter(plantName => !incompatiblePlants.includes(plantName))
-  return remains
-}
-
-const smartMatchingFriends = rootNames => {
-  // console.log('rootNames', rootNames)
-  // first we eliminate mutually incompatible rootNames (inputs)
-  const incompatiblePlants = incompatibles(rootNames)
-  // we find which of the rootNames are compatible with each other
-  let remains = compatibles(rootNames) // .filter(plantName => !incompatiblePlants.includes(plantName))
-
-  // now we find the friends of all remaining plants
-  const friends = matchingFriends(remains)
-
-  // now we look for incompatibilities of all the friends of the input plants
-  let incompatibleFriends = incompatibles(friends)
-  let remainingFriends = compatibles(friends)
-  // and we also look for incompatibilities between the remaining friends with the initial inputs
-  remainingFriends = compatibles([].concat(remainingFriends, rootNames))
-  // an we remove the initial inputs
-  remainingFriends = remainingFriends.filter(plantName => !rootNames.includes(plantName))
-
-  // console.log('incompatiblePlants', incompatiblePlants, 'remains', remains,
-  //  'friends', friends, 'incompatibleFriends', incompatibleFriends, 'remainingFriends', remainingFriends)
-
-  return {
-    remains,
-    incompatiblePlants,
-    friends: remainingFriends
+const listPlants = () => console.log(chalk.green(allPlants(allPlantsData).join('\n')))
+const findFriend = (rootNames) => {
+  const {incompatiblePlants, friends, remains} = smartMatchingFriends(allPlantsData, rootNames)
+  const inputsStr = remains.join(' ')
+  if (incompatiblePlants.length > 0) {
+    console.log(`${chalk.bold.red('incompatible plants !!! : ')}`)
+    console.log(`${chalk.red('  ' + incompatiblePlants.join(' '))}`)
+  }
+  if (friends.length === 0) {
+    console.log(`${chalk.bold.red('no results found for ' + rootNames.join('\n  '))}`)
+  } else {
+    console.log(`${chalk.bold.magenta('compatible plants: with')} ${chalk.bold.green(inputsStr)}`)
+    console.log(`  ${chalk.magenta(friends.join('\n  '))}`)
   }
 }
 
 program
-  .version('0.1.0')
+  .version('0.0.1')
   .usage('[options] <file ...>')
+  .option('-f, --filePaths, <filePaths...>', 'list of filepaths to import data from', importPlantsData)
 
 program
-  .command('list-plants') // sub-command name, coffeeType = type, required
-  .action(function (coffeeType, args) {
-    console.log('parsed', parsed.map(plant => plant.name))
-    // const plantNames =
-    // console.log('parsed', parsed[0])
-  })
+  .command('list', listPlants) // sub-command name
+  .description('list all known plants')
+  .action(listPlants)
 
 program
-  .command('friend [names...]') // sub-command friend, name, required
-  .action(function (rootNames, args) {
-    const {incompatiblePlants, friends, remains} = smartMatchingFriends(rootNames)
-    const inputsStr = remains.join(' ')
-    if (incompatiblePlants.length > 0) {
-      console.log(`${chalk.bold.red('incompatible plants !!! : ')}`)
-      console.log(`${chalk.red('  ' + incompatiblePlants.join(' '))}`)
+  .command('friend <plantNames...>') // sub-command friend, plantNames are required
+  .description('find companion plants for the given plants')//, findFriend)
+  .action(findFriend)
+
+/*program
+  .action((actionName, a, ...rootNames)=> {
+    const actions = {
+      list: listPlants,
+      friend: findFriend
     }
-    if (friends.length === 0) {
-      console.log(`${chalk.bold.red('no results found for ' + rootNames.join(' '))}`)
-    } else {
-      console.log(`${chalk.bold.magenta('compatible plants: with')} ${chalk.bold.green(inputsStr)}`)
-      console.log(`  ${chalk.magenta(friends.join(' '))}`)
-    }
-    // const plantNames =
-    // console.log('parsed', parsed[0])
+    console.log('rootam',a,  rootNames)
+    actions[actionName](rootNames)
+    
   })
-
-/* const mode = 'nice'
-
-if (mode === 'nice') {
-  console.log('parsed', parsed[0])
-} */
-
+  .action(function (actionName, rootNames, args) {
+  })*/
 program.parse(process.argv)
+console.log('program.filePaths', program.filePaths)
+
+return 
+
+const searchPlant = (answers, input) => {
+  input = input || ''
+  return new Promise(function (resolve) {
+    const fuzzyResult = fuzzy.filter(input, allPlantsData.map(plant => plant.name))
+    resolve(fuzzyResult.map(function (el) {
+      return el.original
+    }))
+  })
+}
+
+let plantNames = []
+function askForPlant (callback) {
+  const questions = [
+    {
+      type: 'autocomplete',
+      name: 'plantName',
+      message: 'type a plant name',
+      suggestOnly: true,
+      source: searchPlant,
+      when: function (answers) {
+        return answers.listOperation === 'fiend friend plants'
+      }
+    }
+  ]
+  inquirer.prompt(questions).then(answ => {
+    console.log('bla bla', answ)
+    plantNames.push(answ.plantName)
+
+    clear()
+    if (answ.plantName !== '') {
+      askForPlant(() => {
+        callback()
+      })
+    } else {
+      console.log('all done', plantNames)
+      callback()
+    }
+  })
+}
+
+const mainMenu = (callback) => {
+  const questions = [
+    {
+      type: 'list',
+      name: 'listOperation',
+      message: 'Choose what you want to do ',
+      choices: ['list plants', 'fiend friend plants']
+    }
+  ]
+  inquirer
+    .prompt(questions)
+    .then(function (answers) {
+      clear()
+      console.log('answers', answers, answers.listOperation)
+      if (answers.listOperation === 'list plants') {
+        listPlants()
+        mainMenu()
+      } else {
+        askForPlant()
+        // console.log(smartMatchingFriends(answers['plant-name']))
+      }
+      // console.log(answers)
+      // console.log(answers['plant-name'])
+    })
+}
+
+// mainMenu()
